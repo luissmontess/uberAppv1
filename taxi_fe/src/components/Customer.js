@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useState, useMemo} from 'react';
 import Button from '@mui/material/Button'
 
 import socket from '../services/taxi_socket';
@@ -8,6 +8,10 @@ function Customer(props) {
   let [pickupAddress, setPickupAddress] = useState("Tecnologico de Monterrey, campus Puebla, Mexico");
   let [dropOffAddress, setDropOffAddress] = useState("Triangulo Las Animas, Puebla, Mexico");
   let [msg, setMsg] = useState("");
+
+  useMemo(() => {
+    console.log(msg)
+  }, [msg])
 
   useEffect(() => {
     let channel = socket.channel("customer:" + props.username, {token: "123"});
