@@ -1,4 +1,25 @@
 defmodule TaxiBeWeb.TaxiAllocationJob do
+  # En esta primera version el proceso inicial ordena los conductores por proximidad al cliente
+
+  # Esta llama a una funcion auxiliar llamada :block1, la cual hace match con el request,
+  # un arreglo de taxistas, y un estado NotAccepted (mantiene el proceso si es que sigue en NotAccepted)
+  # en esta funcion, manda la peticion de cliente al conductor y edita el estado para tomar en cuenta
+  # la cola de la lista de conductores, efectivamente descartando el conductor en turno para futuras
+  # llamadas de la funcion
+
+  # Este ultimo punto es importante, porque en caso de no ser aun aceptada la peticion despues de
+  # 15 segundos, se llama nuevamente la funcion :block1 para mandar la peticion al siguiente
+  # conductor
+
+  # Al terminarse todos los conductores, representado por una condicional if taxis != [],
+  # se notifica al cliente que hubo un problema encontrando un conductor
+
+  # Por otro lado, si en algun momento valido es aceptada la peticion, el estado :status
+  # cambia a Accepted, y no permite la peticion ser aceptada por otro conductor
+
+  # Si la peticion es aceptada en un momento no valido, se notifica al conductor
+  # que se ha tardado mucho tiempo en contestar y no es posible aceptar.
+
   use GenServer
 
   def start_link(request, name) do
@@ -131,7 +152,7 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
     taxi_relative_positions = TaxiBeWeb.Geolocator.destination_and_duration(positions, pickup)
     finished_list =
       Enum.zip([taxis, taxi_relative_positions])
-      |> Enum.sort()
+      |> Enum.sort(:desc)
       |> IO.inspect()
       |> Enum.map(fn {item, _} -> item end)
 
