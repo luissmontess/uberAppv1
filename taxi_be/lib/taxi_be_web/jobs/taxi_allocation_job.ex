@@ -4,6 +4,8 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
   # Si en conductor tarda mas de 15 segundos, no es valida la aceptacion
   # correr mas de una vez si existe alguna falla en primer intento
 
+  # igualemente se calcula el tiempo de llegada
+
   use GenServer
 
   def start_link(request, name) do
@@ -96,10 +98,16 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
     if driver_username == taxi.nickname do
       # en caso de qeu si, hacer un procesode aceptacion exitosa
       %{
-        "username" => customer_username
+        "username" => customer_username,
+        "pickup_address" => pickup
       } = request
 
-      TaxiBeWeb.Endpoint.broadcast("customer:"<>customer_username, "booking_request", %{msg: "Tu taxi, #{driver_username} esta en camino"})
+      taxi = select_candidate_taxis(request)
+      |> Enum.find(fn item -> item.nickname == driver_username end)
+
+      arrival = compute_estimated_arrival(pickup, taxi)
+
+      TaxiBeWeb.Endpoint.broadcast("customer:"<>customer_username, "booking_request", %{msg: "Your driver, #{driver_username} on the way in #{round(Float.floor(arrival/60, 0))} minutes and #{rem(round(arrival), 60)} seconds"})
 
       {:noreply, state |> Map.put(:status, Accepted)}
     else
@@ -126,7 +134,14 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
     {:noreply, state}
   end
 
-  # funciones auxiliarias para computar diferentes valores 
+  # funciones auxiliarias para computar diferentes valores
+  def compute_estimated_arrival(pickup_address, taxi) do
+    coord1 = {:ok, [taxi.longitude, taxi.latitude]}
+    coord2 = TaxiBeWeb.Geolocator.geocode(pickup_address)
+    {_distance, duration} = TaxiBeWeb.Geolocator.distance_and_duration(coord1, coord2)
+    duration
+  end
+
   def compute_ride_fare(request) do
     %{
       "pickup_address" => pickup_address,
