@@ -1,24 +1,8 @@
 defmodule TaxiBeWeb.TaxiAllocationJob do
-  # En esta primera version el proceso inicial ordena los conductores por proximidad al cliente
-
-  # Esta llama a una funcion auxiliar llamada :block1, la cual hace match con el request,
-  # un arreglo de taxistas, y un estado NotAccepted (mantiene el proceso si es que sigue en NotAccepted)
-  # en esta funcion, manda la peticion de cliente al conductor y edita el estado para tomar en cuenta
-  # la cola de la lista de conductores, efectivamente descartando el conductor en turno para futuras
-  # llamadas de la funcion
-
-  # Este ultimo punto es importante, porque en caso de no ser aun aceptada la peticion despues de
-  # 15 segundos, se llama nuevamente la funcion :block1 para mandar la peticion al siguiente
-  # conductor
-
-  # Al terminarse todos los conductores, representado por una condicional if taxis != [],
-  # se notifica al cliente que hubo un problema encontrando un conductor
-
-  # Por otro lado, si en algun momento valido es aceptada la peticion, el estado :status
-  # cambia a Accepted, y no permite la peticion ser aceptada por otro conductor
-
-  # Si la peticion es aceptada en un momento no valido, se notifica al conductor
-  # que se ha tardado mucho tiempo en contestar y no es posible aceptar.
+  # tiempo de duracion de cada peticion a conductor: 15 segundos
+  # Si se acaban los conductores avisa problema a cliente
+  # Si en conductor tarda mas de 15 segundos, no es valida la aceptacion
+  # correr mas de una vez si existe alguna falla en primer intento
 
   use GenServer
 
@@ -26,11 +10,13 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
     GenServer.start_link(__MODULE__, request, name: name)
   end
 
+  # incializa estado y manda a llamar step1
   def init(request) do
     Process.send(self(), :step1, [:nosuspend])
     {:ok, %{request: request}}
   end
 
+  # notifica a cliente precio de viaje y agrega taxistas y status: NotAccepted a Estado
   def handle_info(:step1, %{request: request}) do
     Process.send(self(), :block1, [:nosuspend])
 
@@ -52,16 +38,20 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
     {:noreply, %{request: request, candidates: dbtaxis, status: NotAccepted}}
   end
 
-
+  # Manda notificacion de viaje disponible a cada taxista
   def handle_info(:block1, %{request: request, candidates: taxis, status: NotAccepted} = state) do
+    # En caso de no agotar taxistas disponibles
     if taxis != [] do
+      # extraer taxista mas cercano
       taxi = hd(taxis)
+      # extraer datos del request
       %{
         "pickup_address" => pickup_address,
         "dropoff_address" => dropoff_address,
         "booking_id" => booking_id
       } = request
 
+      # enviar notificacion al taxista
       TaxiBeWeb.Endpoint.broadcast(
       "driver:" <> taxi.nickname,
       "booking_request",
@@ -71,42 +61,49 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
           status: true
       })
 
+      # llamar funcion auxiliar de cancelacion de peticion a taxista cada 15 segundos
       Process.send_after(self(),:timeout1, 15000)
+
+      # editar estado para descartar taxista notificado en el futuro
       {:noreply, %{request: request, candidates: tl(taxis), contacted_taxi: taxi, status: NotAccepted}}
     else
+      # al agotar taxista
       %{
         "username" => customer_username
       } = request
 
+      # notificar cliente de un problema buscando taxista disponible
       TaxiBeWeb.Endpoint.broadcast("customer:"<>customer_username, "booking_request", %{msg: "Hubo un problema"})
       {:noreply, %{state | contacted_taxi: ""}}
     end
   end
 
+  # se manda a llamar anterior funcion pero con taxista anterior descartado
   def handle_info(:timeout1, %{request: _request, status: NotAccepted} = state) do
     Process.send(self(), :block1, [:nosuspend])
     {:noreply, state}
   end
 
+  # En caso de que se mande a llamr cuando estado es Accepted, no se hace ninguna accion
+  #  evita contactar nuevos taxista con peticion ya aceptada
   def handle_info(:timeout1, %{request: _request, status: Accepted} = state) do
     {:noreply, state}
   end
 
+  # Aceptacion de taxista en caso NotAccepted
   def handle_cast({:process_accept, driver_username}, %{request: request, status: NotAccepted, contacted_taxi: taxi} = state) do
-
-    IO.inspect(state)
-
-
+    # checar que el taxista que acepto coincide con contacted taxi
     if driver_username == taxi.nickname do
+      # en caso de qeu si, hacer un procesode aceptacion exitosa
       %{
         "username" => customer_username
       } = request
 
-      TaxiBeWeb.Endpoint.broadcast("customer:"<>customer_username, "booking_request", %{msg: "Tu taxi esta en camino"})
-      # Process.send(self(), :block1, [:nosuspend])
+      TaxiBeWeb.Endpoint.broadcast("customer:"<>customer_username, "booking_request", %{msg: "Tu taxi, #{driver_username} esta en camino"})
 
       {:noreply, state |> Map.put(:status, Accepted)}
     else
+      # en caso de que no, notificar al taxista que se tardo demasiado
       TaxiBeWeb.Endpoint.broadcast("driver:"<>driver_username, "booking_notification", %{msg: "Muy tarde para aceptar"})
 
       {:noreply, state}
@@ -116,20 +113,20 @@ defmodule TaxiBeWeb.TaxiAllocationJob do
 
   end
 
+  # aceptacion en estado Accepted
   def handle_cast({:process_accept, driver_username}, %{request: request, status: Accepted} = state) do
+    # notificar al taxista que algun otro socio ya acepto esta solicitud
     TaxiBeWeb.Endpoint.broadcast("driver:"<>driver_username, "booking_notification", %{msg: "Ha sido aceptado por otro socio"})
-    # Process.send(self(), :block1, [:nosuspend])
-
     {:noreply, state}
-
   end
 
+  # en caso de rechazo de un taxista no modifica estado ni hace llamadas para evitar
+  # efectso secundarios en el proceso
   def handle_cast({:process_reject, driver_username}, state) do
-    # IO.inspect(state)
-    Process.send(self(), :block1, [:nosuspend])
     {:noreply, state}
   end
 
+  # funciones auxiliarias para computar diferentes valores 
   def compute_ride_fare(request) do
     %{
       "pickup_address" => pickup_address,
